@@ -1,0 +1,15 @@
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "ios-location-picker",
+  "main": "src/index.js",
+  "compatibility_date": "2026-01-01",
+  "workers_dev": true,
+  // Binding has no id on purpose: `wrangler deploy` (and the Deploy to
+  // Cloudflare button) auto-provisions the namespace and writes the id back
+  // here. To reuse an existing namespace, add "id" (and "preview_id" for dev).
+  "kv_namespaces": [
+    {
+      "binding": "LOC_KV"
+    }
+  ]
+}

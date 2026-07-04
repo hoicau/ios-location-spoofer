@@ -1,6 +1,6 @@
 #!name=iOS Location Spoofer
 #!desc=拦截 Apple 定位服务回传的坐标并置换为指定位置（Loon 插件）
-#!homepage=https://github.com/kun775/ios-location-spoofer
+#!homepage=https://github.com/hoicau/ios-location-spoofer
 
 # Loon 插件参数必须用 argument=[{参数名},...] 格式，字符串 {latitude} 占位符不会生效
 # 插件 UI 里的经纬度是备用值；填 configHost+configToken 后以 loc.json 为准（UI 不会变）
@@ -17,9 +17,9 @@ configUrl = input,"",tag=远程配置URL,desc=完整 loc.json 地址；与上两
 debug = switch,true,tag=调试日志,desc=建议开启，Loon 日志搜 Location spoofer
 
 [Script]
-http-request ^https?:\/\/(?:gs-loc(?:-cn)?\.apple\.com|bluedot\.is\.autonavi\.com(?:\.gds\.alibabadns\.com)?)\/clls\/wloc(?:\?.*)?$ script-path=https://raw.githubusercontent.com/kun775/ios-location-spoofer/main/location-spoofer.js, requires-body=false, timeout=3, tag=iOS Location Spoofer Prepare, argument=[{debug}]
-http-response ^https?:\/\/(?:gs-loc(?:-cn)?\.apple\.com|bluedot\.is\.autonavi\.com(?:\.gds\.alibabadns\.com)?)\/clls\/wloc(?:\?.*)?$ script-path=https://raw.githubusercontent.com/kun775/ios-location-spoofer/main/location-spoofer.js, requires-body=true, binary-body-mode=true, max-size=1048576, timeout=12, tag=iOS Location Spoofer, argument=[{enabled},{latitude},{longitude},{altitude},{address},{configHost},{configToken},{configUrl},{debug}]
-cron "*/5 * * * *" script-path=https://raw.githubusercontent.com/kun775/ios-location-spoofer/main/location-spoofer.js, timeout=30, tag=iOS Location Spoofer Sync, argument=[{address},{configHost},{configToken},{configUrl},{debug}]
+http-request ^https?:\/\/(?:gs-loc(?:-cn)?\.apple\.com|bluedot\.is\.autonavi\.com(?:\.gds\.alibabadns\.com)?)\/clls\/wloc(?:\?.*)?$ script-path=https://raw.githubusercontent.com/hoicau/ios-location-spoofer/main/scripts/location-spoofer.js, requires-body=false, timeout=3, tag=iOS Location Spoofer Prepare, argument=[{debug}]
+http-response ^https?:\/\/(?:gs-loc(?:-cn)?\.apple\.com|bluedot\.is\.autonavi\.com(?:\.gds\.alibabadns\.com)?)\/clls\/wloc(?:\?.*)?$ script-path=https://raw.githubusercontent.com/hoicau/ios-location-spoofer/main/scripts/location-spoofer.js, requires-body=true, binary-body-mode=true, max-size=1048576, timeout=12, tag=iOS Location Spoofer, argument=[{enabled},{latitude},{longitude},{altitude},{address},{configHost},{configToken},{configUrl},{debug}]
+cron "*/5 * * * *" script-path=https://raw.githubusercontent.com/hoicau/ios-location-spoofer/main/scripts/location-spoofer.js, timeout=30, tag=iOS Location Spoofer Sync, argument=[{address},{configHost},{configToken},{configUrl},{debug}]
 
 [mitm]
 hostname = gs-loc.apple.com, gs-loc-cn.apple.com, bluedot.is.autonavi.com, bluedot.is.autonavi.com.gds.alibabadns.com

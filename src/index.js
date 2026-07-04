@@ -1,204 +1,14 @@
-// 定位选点服务 —— 单文件、零依赖（仅用 Node 内置模块）
-// 支持：高德矢量 / 高德卫星 / 国外 OSM 多地图切换，自动 GCJ-02<->WGS-84 坐标转换
-// 搜索显示多个候选（只移动视野）；点地图/拖图钉移动定位点；点“保存定位”才写入
-// 点地图自动按地形获取海拔；海拔/水平精度/垂直精度可手动微调
-// 可选自带 https（复用 3x-ui 的 acme.sh 证书）
-//
-// 启动示例（http）：
-//   TOKEN=你的密码 PORT=8080 node server.js
-//
-// 启动示例（https，复用已有证书）：
-//   TOKEN=你的密码 PORT=8443 \
-//   CERT=/root/cert/你的域名/fullchain.pem \
-//   KEY=/root/cert/你的域名/privkey.pem \
-//   node server.js
-//
-// Shadowrocket 模块 argument 末尾加：
-//   &configUrl=https://你的域名:8443/loc.json?token=你的密码
-//
-// 注意：URL 必须带 ?token=<TOKEN>。缺 token → 服务端返回 401 + "missing token"；
-// token 错 → 返回 403 + "bad token"。网页端点同样适用。
+/**
+ * iOS Location Picker — Cloudflare Worker
+ *
+ * API:
+ *   GET  /loc.json?token=   → 读取坐标 JSON（Loon / Shadowrocket configUrl）
+ *   POST /set?token=        → 保存坐标（并开启伪造）
+ *   POST /enable            → 切换伪造/恢复真实定位（无需 token，{enabled:false} 放行）
+ *   GET  /?token=           → 地图选点网页（必须带正确 token）
+ */
 
-const http = require("http");
-const https = require("https");
-const fs = require("fs");
-const path = require("path");
-
-const PORT = process.env.PORT || 8080;
-const TOKEN = process.env.TOKEN || "change-me-please"; // 部署时务必改成随机字符串
-const CERT = process.env.CERT || "";                   // https 证书 fullchain 路径（留空=http）
-const KEY = process.env.KEY || "";                     // https 私钥路径
-const DATA_FILE = path.join(__dirname, "loc.json");
-
-// 字段名/默认值与 location-spoofer.js 的 DEFAULT_CONFIG 对齐
-const DEFAULT = {
-  enabled: true,          // false = 脚本放行原始响应（恢复真实定位）
-  latitude: 37.3349,
-  longitude: -122.00902,
-  altitude: 530,
-  horizontalAccuracy: 39,
-  verticalAccuracy: 1000
-};
-
-function readLoc() {
-  try {
-    return JSON.parse(fs.readFileSync(DATA_FILE, "utf8"));
-  } catch (e) {
-    return Object.assign({}, DEFAULT);
-  }
-}
-
-function writeLoc(obj) {
-  fs.writeFileSync(DATA_FILE, JSON.stringify(obj, null, 2));
-}
-
-function send(res, code, type, body) {
-  res.writeHead(code, {
-    "Content-Type": type,
-    "Access-Control-Allow-Origin": "*",
-    "Cache-Control": "no-store"
-  });
-  res.end(body);
-}
-
-// 区分「没传 token」和「token 传错」：前者 401 引导补 ?token=，后者 403
-function checkToken(token, res) {
-  if (!TOKEN) return true; // 没设 TOKEN 环境变量 = 不校验（仅本地开发用）
-  if (token == null || token === "") {
-    send(res, 401, "application/json", '{"error":"missing token","hint":"add ?token=<TOKEN> to the URL (must match the TOKEN env var)"}');
-    return false;
-  }
-  if (token !== TOKEN) {
-    send(res, 403, "application/json", '{"error":"bad token"}');
-    return false;
-  }
-  return true;
-}
-
-function handler(req, res) {
-  const url = new URL(req.url, "http://" + (req.headers.host || "localhost"));
-  const token = url.searchParams.get("token");
-
-  // ---- Shadowrocket 读取坐标（存的就是 WGS-84，Apple 需要的格式） ----
-  if (url.pathname === "/loc.json" && req.method === "GET") {
-    if (!checkToken(token, res)) return;
-    return send(res, 200, "application/json", JSON.stringify(readLoc()));
-  }
-
-  // ---- 网页保存（前端已转好 WGS-84 再发过来；海拔/精度可选） ----
-  if (url.pathname === "/set" && req.method === "POST") {
-    if (!checkToken(token, res)) return;
-    let body = "";
-    req.on("data", function (c) {
-      body += c;
-      if (body.length > 1e4) req.destroy();
-    });
-    req.on("end", function () {
-      try {
-        const j = JSON.parse(body);
-        const la = Number(j.lat);
-        const lo = Number(j.lng);
-        if (
-          !isFinite(la) || !isFinite(lo) ||
-          la < -90 || la > 90 || lo < -180 || lo > 180
-        ) {
-          return send(res, 400, "application/json", '{"error":"bad coords"}');
-        }
-        const cur = readLoc();
-        cur.enabled = true; // 保存一个新位置 = 开启伪造
-        cur.latitude = la;
-        cur.longitude = lo;
-        // 海拔/精度：脚本里都会被 Math.trunc 成整数，这里取整存
-        function setInt(key, v) {
-          if (v !== undefined && v !== null && v !== "" && isFinite(Number(v))) {
-            cur[key] = Math.round(Number(v));
-          }
-        }
-        setInt("altitude", j.altitude);
-        setInt("horizontalAccuracy", j.horizontalAccuracy);
-        setInt("verticalAccuracy", j.verticalAccuracy);
-        writeLoc(cur);
-        return send(res, 200, "application/json", JSON.stringify(cur));
-      } catch (e) {
-        return send(res, 400, "application/json", '{"error":"bad json"}');
-      }
-    });
-    return;
-  }
-
-  // ---- 一键切换：伪造 / 恢复真实定位 ----
-  if (url.pathname === "/enable" && req.method === "POST") {
-    if (!checkToken(token, res)) return;
-    let body = "";
-    req.on("data", function (c) {
-      body += c;
-      if (body.length > 1e4) req.destroy();
-    });
-    req.on("end", function () {
-      try {
-        const j = JSON.parse(body);
-        const cur = readLoc();
-        cur.enabled = j.enabled !== false; // false=恢复真实定位（脚本放行）
-        writeLoc(cur);
-        return send(res, 200, "application/json", JSON.stringify(cur));
-      } catch (e) {
-        return send(res, 400, "application/json", '{"error":"bad json"}');
-      }
-    });
-    return;
-  }
-
-  // ---- 地图网页 ----
-  if (url.pathname === "/" && req.method === "GET") {
-    return send(res, 200, "text/html; charset=utf-8", PAGE);
-  }
-
-  return send(res, 404, "text/plain", "not found");
-}
-
-// ---- 启动：有证书走 https，否则 http ----
-function onListenError(err) {
-  if (err.code === "EADDRINUSE") {
-    console.error("启动失败：端口 " + PORT + " 已被占用，请改用其它空闲端口（修改 PORT 环境变量）。");
-  } else if (err.code === "EACCES") {
-    console.error("启动失败：没有权限监听端口 " + PORT + "（1024 以下端口需 root 权限）。");
-  } else {
-    console.error("启动失败：" + err.message);
-  }
-  process.exit(1);
-}
-
-function start() {
-  if (CERT && KEY) {
-    try {
-      const opts = { cert: fs.readFileSync(CERT), key: fs.readFileSync(KEY) };
-      const server = https.createServer(opts, handler);
-      server.on("error", onListenError);
-      // acme.sh 续期后无需重启：每 12 小时热加载一次证书
-      setInterval(function () {
-        try {
-          server.setSecureContext({ cert: fs.readFileSync(CERT), key: fs.readFileSync(KEY) });
-        } catch (e) {
-          console.log("cert reload failed: " + e.message);
-        }
-      }, 12 * 3600 * 1000);
-      server.listen(PORT, function () {
-        console.log("location picker (https) listening on :" + PORT);
-      });
-      return;
-    } catch (e) {
-      console.log("https 启动失败（证书读取失败），回退到 http：" + e.message);
-    }
-  }
-  const server = http.createServer(handler);
-  server.on("error", onListenError);
-  server.listen(PORT, function () {
-    console.log("location picker (http) listening on :" + PORT);
-  });
-}
-
-start();
-
+// 地图选点 UI（Location Picker page）
 const PAGE = `<!doctype html>
 <html lang="zh">
 <head>
@@ -249,7 +59,6 @@ const PAGE = `<!doctype html>
 <script>
 var token = new URLSearchParams(location.search).get("token") || "";
 
-// ---------- GCJ-02 <-> WGS-84 坐标转换（中国地图偏移修正） ----------
 var GCJ = (function(){
   var PI = Math.PI, a = 6378245.0, ee = 0.00669342162296594323;
   function outOfChina(lat,lng){return (lng<72.004||lng>137.8347)||(lat<0.8293||lat>55.8271);}
@@ -263,7 +72,7 @@ var GCJ = (function(){
     var r=300.0+x+2.0*y+0.1*x*x+0.1*x*y+0.1*Math.sqrt(Math.abs(x));
     r+=(20.0*Math.sin(6.0*x*PI)+20.0*Math.sin(2.0*x*PI))*2.0/3.0;
     r+=(20.0*Math.sin(x*PI)+40.0*Math.sin(x/3.0*PI))*2.0/3.0;
-    r+=(150.0*Math.sin(x/12.0*PI)+300.0*Math.sin(x/30.0*PI))*2.0/3.0;return r;
+    r+=(150.0*Math.sin(x/12.0*PI)+300*Math.sin(x/30.0*PI))*2.0/3.0;return r;
   }
   function wgs2gcj(lat,lng){
     if(outOfChina(lat,lng))return [lat,lng];
@@ -282,16 +91,17 @@ var GCJ = (function(){
   return {wgs2gcj:wgs2gcj, gcj2wgs:gcj2wgs};
 })();
 
-// ---------- 状态 ----------
 var map, marker;
-var WGS = {lat:0, lng:0};   // 当前“定位点(图钉)”的真值 WGS-84（预览用，未必已保存）
-var datum = "gcj";          // 当前底图坐标系：'gcj'(高德) 或 'wgs'(OSM)
-var saved = true;           // 图钉当前位置是否已保存到设备
-var enabledState = true;    // true=伪造中；false=已恢复真实定位（脚本放行）
+var WGS = {lat:0, lng:0};
+var datum = "gcj";
+var saved = true;
+var enabledState = true;  // true=伪造中；false=已恢复真实定位（脚本放行）
 
 function $(id){return document.getElementById(id);}
 function toast(t){var e=$("toast");e.textContent=t;e.classList.add("show");setTimeout(function(){e.classList.remove("show");},1800);}
 function numOrNull(id){var v=$(id).value.trim();return v===""?null:Number(v);}
+// Leaflet 在重复世界地图上可能返回 -239 这类经度，需要归一化。
+function wrapLng(lng){return ((((Number(lng)+180)%360)+360)%360)-180;}
 
 function info(){
   if(!enabledState){
@@ -314,7 +124,7 @@ function updateEnabledUI(){
 // 一键切换 伪造/恢复真实
 function toggleEnabled(){
   var want = !enabledState;
-  fetch("/enable?token="+encodeURIComponent(token),{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({enabled:want})})
+  fetch("/enable",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({enabled:want})})
     .then(function(r){
       if(r.ok){ enabledState=want; updateEnabledUI();
         toast(want ? "已开启伪造，记得关开定位生效" : "已恢复真实定位，记得关开定位生效"); }
@@ -324,36 +134,34 @@ function toggleEnabled(){
 }
 
 function dispPos(){return datum==="gcj"?GCJ.wgs2gcj(WGS.lat,WGS.lng):[WGS.lat,WGS.lng];}
-function toWgs(lat,lng){return datum==="gcj"?GCJ.gcj2wgs(lat,lng):[lat,lng];}
+function toWgs(lat,lng){lng=wrapLng(lng);return datum==="gcj"?GCJ.gcj2wgs(lat,lng):[lat,lng];}
 
-// 按地形取海拔（open-meteo 免费高程接口，传 WGS-84）
 function fetchElevation(lat,lng){
+  lng=wrapLng(lng);
   return fetch("https://api.open-meteo.com/v1/elevation?latitude="+lat+"&longitude="+lng)
     .then(function(r){return r.json();})
     .then(function(d){return (d&&d.elevation&&d.elevation.length)?d.elevation[0]:null;})
     .catch(function(){return null;});
 }
 
-// 移动定位点(图钉)：只预览，不保存
 function movePin(dispLat,dispLng){
+  dispLng=wrapLng(dispLng);
   var w=toWgs(dispLat,dispLng);
-  WGS={lat:w[0], lng:w[1]};
+  WGS={lat:w[0], lng:wrapLng(w[1])};
   saved=false;
   marker.setLatLng([dispLat,dispLng]);
   info();
   fetchElevation(WGS.lat,WGS.lng).then(function(el){ if(el!==null)$("alt").value=Math.round(el); info(); });
 }
 
-// 保存定位点到设备（写入 loc.json，Shadowrocket 才会用）
 function commit(){
   var payload={lat:WGS.lat, lng:WGS.lng,
     altitude:numOrNull("alt"), horizontalAccuracy:numOrNull("hacc"), verticalAccuracy:numOrNull("vacc")};
   fetch("/set?token="+encodeURIComponent(token),{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(payload)})
-    .then(function(r){ if(r.ok){ saved=true; enabledState=true; updateEnabledUI(); toast("已保存 ✓ 记得关开定位生效"); } else { toast("保存失败 "+r.status); } })
+    .then(function(r){ if(r.ok){ saved=true; enabledState=true; updateEnabledUI(); toast("已保存 ✓ Loon/小火箭约60秒内生效"); } else { toast("保存失败 "+r.status); } })
     .catch(function(){ toast("网络错误"); });
 }
 
-// 搜索：列出多个候选，点选只移动地图视野（不动定位点、不保存）
 function search(){
   var q=$("q").value.trim(); if(!q) return;
   fetch("https://nominatim.openstreetmap.org/search?format=json&addressdetails=0&limit=8&q="+encodeURIComponent(q))
@@ -369,7 +177,7 @@ function search(){
           box.classList.remove("show"); box.innerHTML="";
           var la=+it.lat, lo=+it.lon;
           var p = datum==="gcj"?GCJ.wgs2gcj(la,lo):[la,lo];
-          map.setView(p,15);            // 只移动视野；要设为定位，请在地图上点一下放图钉
+          map.setView(p,15);
           toast("已定位视野，在地图上点一下放置图钉");
         });
         box.appendChild(row);
@@ -420,3 +228,166 @@ load();
 </script>
 </body>
 </html>`;
+
+const KV_KEY = "loc";
+
+const DEFAULT = {
+  enabled: true,          // false = 脚本放行原始响应（恢复真实定位）
+  latitude: 37.3349,
+  longitude: -122.00902,
+  altitude: 530,
+  horizontalAccuracy: 39,
+  verticalAccuracy: 1000,
+};
+
+const CORS = {
+  "Access-Control-Allow-Origin": "*",
+  "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
+  "Access-Control-Allow-Headers": "Content-Type",
+};
+
+function jsonResponse(body, status = 200) {
+  return new Response(typeof body === "string" ? body : JSON.stringify(body), {
+    status,
+    headers: {
+      "Content-Type": "application/json",
+      "Cache-Control": "no-store",
+      ...CORS,
+    },
+  });
+}
+
+function textResponse(body, contentType, status = 200) {
+  return new Response(body, {
+    status,
+    headers: {
+      "Content-Type": contentType,
+      "Cache-Control": "no-store",
+      ...CORS,
+    },
+  });
+}
+
+function unauthorized() {
+  return jsonResponse({ error: "bad token" }, 403);
+}
+
+function checkToken(request, env) {
+  const configured = env.TOKEN;
+  if (!configured) {
+    return { ok: false, error: "server misconfigured: TOKEN secret not set" };
+  }
+  const url = new URL(request.url);
+  const token = url.searchParams.get("token");
+  if (token !== configured) {
+    return { ok: false, error: "bad token" };
+  }
+  return { ok: true };
+}
+
+async function readLoc(env) {
+  try {
+    const raw = await env.LOC_KV.get(KV_KEY);
+    if (!raw) {
+      return { ...DEFAULT };
+    }
+    return JSON.parse(raw);
+  } catch {
+    return { ...DEFAULT };
+  }
+}
+
+async function writeLoc(env, obj) {
+  await env.LOC_KV.put(KV_KEY, JSON.stringify(obj));
+}
+
+function setInt(target, key, value) {
+  if (value !== undefined && value !== null && value !== "" && Number.isFinite(Number(value))) {
+    target[key] = Math.round(Number(value));
+  }
+}
+
+function wrapLng(lng) {
+  return ((((Number(lng) + 180) % 360) + 360) % 360) - 180;
+}
+
+export default {
+  async fetch(request, env) {
+    if (request.method === "OPTIONS") {
+      return new Response(null, { status: 204, headers: CORS });
+    }
+
+    const url = new URL(request.url);
+    const auth = checkToken(request, env);
+
+    if (url.pathname === "/loc.json" && request.method === "GET") {
+      if (!auth.ok) {
+        return unauthorized();
+      }
+      const loc = await readLoc(env);
+      return jsonResponse(loc);
+    }
+
+    if (url.pathname === "/set" && request.method === "POST") {
+      if (!auth.ok) {
+        return unauthorized();
+      }
+      let bodyText;
+      try {
+        bodyText = await request.text();
+        if (bodyText.length > 10000) {
+          return jsonResponse({ error: "payload too large" }, 413);
+        }
+        const j = JSON.parse(bodyText);
+        const la = Number(j.lat);
+        const loRaw = Number(j.lng);
+        if (!Number.isFinite(la) || !Number.isFinite(loRaw) || la < -90 || la > 90) {
+          return jsonResponse({ error: "bad coords" }, 400);
+        }
+        const lo = wrapLng(loRaw);
+        const cur = await readLoc(env);
+        cur.enabled = true; // 保存一个新位置 = 开启伪造
+        cur.latitude = la;
+        cur.longitude = lo;
+        setInt(cur, "altitude", j.altitude);
+        setInt(cur, "horizontalAccuracy", j.horizontalAccuracy);
+        setInt(cur, "verticalAccuracy", j.verticalAccuracy);
+        await writeLoc(env, cur);
+        return jsonResponse(cur);
+      } catch {
+        return jsonResponse({ error: "bad json" }, 400);
+      }
+    }
+
+    // ---- 一键切换：伪造 / 恢复真实定位（无需 token）----
+    if (url.pathname === "/enable" && request.method === "POST") {
+      let bodyText;
+      try {
+        bodyText = await request.text();
+        if (bodyText.length > 10000) {
+          return jsonResponse({ error: "payload too large" }, 413);
+        }
+        const j = JSON.parse(bodyText);
+        const cur = await readLoc(env);
+        cur.enabled = j.enabled !== false; // false=恢复真实定位（脚本放行）
+        await writeLoc(env, cur);
+        return jsonResponse(cur);
+      } catch (error) {
+        return jsonResponse({ error: "bad json" }, 400);
+      }
+    }
+
+    if ((url.pathname === "/" || url.pathname === "") && request.method === "GET") {
+      if (!auth.ok) {
+        return unauthorized();
+      }
+      return textResponse(PAGE, "text/html; charset=utf-8");
+    }
+
+    if (url.pathname === "/health") {
+      return jsonResponse({ ok: true, kv: !!env.LOC_KV, tokenConfigured: !!env.TOKEN });
+    }
+
+    return textResponse("not found", "text/plain", 404);
+  },
+};

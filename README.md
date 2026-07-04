@@ -1,139 +1,240 @@
 # iOS Location Spoofer
 
-用代理软件的 HTTPS 解密功能，把 Apple 地图定位骗到世界任何角落。
+Use your proxy app's HTTPS decryption (MITM) to teleport Apple's location service anywhere in the world — no jailbreak, no computer, no developer account.
 
-> 📖 **新手直接看这篇** → [**小白保姆级图文教程**](使用教程.md)（一步步教你安装、配置、生效，含常见问题排查）
+**English** · [中文](README_zh-cn.md)
 
-## 参考项目
+## What it is
 
-本项目基于 [acheong08/ios-location-spoofer](https://github.com/acheong08/ios-location-spoofer) 的核心研究。原始项目是用 Go 写的独立 iOS App，通过自建 VPN + MITM 代理实现定位欺骗。
+An iPhone locates itself by asking Apple "where are these Wi-Fi/cell towers?" using the BSSIDs it can see. Apple replies with a list of coordinates, and iOS computes your position from them.
 
-本仓库将其核心逻辑移植为 JavaScript，适配到 Shadowrocket / Surge / Loon / Quantumult X / Stash 五个代理平台，免编译、免开发者账号，即导即用。
+This project intercepts Apple's reply on its way back and **rewrites every coordinate to the location you want**. Your iPhone does the math on the doctored coordinates and believes it is exactly where you told it to be.
 
-### 相比原版新增的功能
+It ships as ready-to-import modules for five proxy apps — no compiling, no dev account, import and go.
 
-- **多平台支持** — 从单一 iOS App 扩展到五个代理软件，覆盖更多用户
-- **蜂窝基站坐标修改** — 原版 Go 只改了 WiFi 热点坐标，JS 版额外处理了 CellTower（字段 22/24）的坐标替换
-- **多响应格式兼容** — 自动检测 Apple 回应的封装格式（ARPC / synthetic / marker / bare），确保改后还能被 iOS 正确识别
-- **运动状态伪造** — 一并改写 motionActivityType 和 motionActivityConfidence，减少被系统识破的可能
-
-## 怎么回事
-
-iPhone 看 Wi-Fi 信号和基站信号，拿着 BSSID 列表去问 Apple 这些设备在什么位置。Apple 回一份坐标清单，iOS 根据这些坐标算出自己在哪里。
-
-这套配置做的事情很简单：**在 Apple 发回坐标的路上拦截下来，全部改成你想要的数字**。iPhone 拿到改造过的坐标，算出来就是你指定的地方。
-
-## 支持哪些软件
-
-| 软件 | 文件 | 导入方法 | 状态 |
-|------|------|---------|------|
-| Shadowrocket（小火箭） | `ios-location-spoofer.sgmodule` | 配置 → 右上角 + | ✅ 实测通过 |
-| Surge | `ios-location-spoofer.sgmodule` | 首页 → 模块 → 安装新模块 | ✅ 实测通过 |
-| Loon | `ios-location-spoofer.lnplugin` | 设置 → 插件 → 添加插件 | ✅ 实测通过 |
-| Quantumult X | `ios-location-spoofer.snippet` | 设置 → 重写 → 添加 | 🟡 待测试 |
-| Stash | `ios-location-spoofer.stoverride` | 覆写 → 安装覆写 | ✅ 实测通过 |
-
-> 欢迎测过的佬友在 Issue 区报实测结果；不通的地方欢迎直接提 PR 改 —— 至少写明**哪个软件、哪个版本、什么系统、报错的日志原文**。
-
-## 怎么用
-
-1. 软件里打开 HTTPS 解密 / MITM 开关
-2. 安装并信任 CA 证书（设置 → 通用 → VPN 与设备管理 → 安装 → 证书信任设置 → 启用）
-3. 导入模块文件，勾上启用
-4. 断开重连 VPN，开关定位服务
-5. 打开地图 App 验证
-
-### Loon 额外说明
-
-1. 导入 `ios-location-spoofer.lnplugin` 后，在 **设置 → 插件** 里打开插件配置页
-2. 可直接填 **纬度 / 经度**；**地址搜索** 由每 15 分钟的定时任务联网解析并缓存（首次请直接填经纬度，或保存地址后等一轮 cron）
-3. 必须开启 Loon 的 **MITM** 并信任证书，且插件内 `[mitm]` 四个域名生效
-4. 插件含 **Prepare** 请求脚本（设置 `Accept-Encoding: identity`，避免 gzip 引发 `zip decompress error` / 脚本超时）
-5. 改坐标后关开定位；调试打开 **调试日志**，在 Loon 日志搜 `Location spoofer`
-
-> 日志若出现 `Evaluate script timeout` 或 `zip decompress error:-3`：更新插件并重载 Loon，确认三条脚本（Prepare / Response / Geocode cron）均已启用。
-
-## 改坐标
-
-默认 Apple Park（37.3349, -122.00902）。在模块参数里改：
+## How it works
 
 ```
-latitude=39.9042&longitude=116.4074
+iPhone  ──(BSSID list)──►  Apple gs-loc  ──(coordinates)──►  [ this script rewrites them ]  ──►  iPhone
 ```
 
-参数：
+The script hooks the `.../clls/wloc` response from Apple's location servers and replaces the WiFi-hotspot and cell-tower coordinates (and the motion-activity fields) with your target, in whatever wire format Apple used (ARPC / synthetic / marker / bare).
 
-| 名字 | 默认值 | 说明 |
-|------|--------|------|
-| `latitude` | 37.3349 | 目标纬度 |
-| `longitude` | -122.00902 | 目标经度 |
-| `address` | （空） | 地址搜索（Loon 插件 UI 填写，联网解析为经纬度，优先于手动经纬度） |
-| `horizontalAccuracy` | 39 | 水平精度 |
-| `verticalAccuracy` | 1000 | 垂直精度 |
-| `altitude` | 530 | 海拔 |
-| `failOpen` | true | 出错放行原数据 |
-| `debug` | false | 调试日志 |
+## Supported apps
 
-## 文件清单
+| App | File | How to import | Status |
+|-----|------|---------------|--------|
+| Shadowrocket | [`scripts/ios-location-spoofer.sgmodule`](scripts/ios-location-spoofer.sgmodule) | Config → top-right **+** | ✅ verified |
+| Surge | [`scripts/ios-location-spoofer-surge.sgmodule`](scripts/ios-location-spoofer-surge.sgmodule) | Home → Modules → Install New Module | ✅ verified |
+| Loon | [`scripts/ios-location-spoofer.lnplugin`](scripts/ios-location-spoofer.lnplugin) | Settings → Plugins → Add | ✅ verified |
+| Quantumult X | [`scripts/ios-location-spoofer.snippet`](scripts/ios-location-spoofer.snippet) | Settings → Rewrite → Add | 🟡 untested |
+| Stash | [`scripts/ios-location-spoofer.stoverride`](scripts/ios-location-spoofer.stoverride) | Override → Install | ✅ verified |
 
+## Step-by-step guide (Shadowrocket)
+
+This walks through Shadowrocket; the other apps follow the same five ideas (enable MITM → trust cert → import module → set coordinates → force a refresh).
+
+### 1. Import the module
+
+1. Open **Shadowrocket** → bottom **Config**
+2. Find **Modules** → tap **+** (top-right) → **From URL**, paste:
+   ```
+   https://raw.githubusercontent.com/hoicau/ios-location-spoofer/main/scripts/ios-location-spoofer.sgmodule
+   ```
+3. Save, and make sure the **iOS Location Spoofer** row is enabled (✓).
+
+### 2. Turn on HTTPS decryption
+
+1. Open the **HTTPS Decryption** page. The entry differs by version — on Shadowrocket iOS 2.2.88(3308): **Config** → tap the **ⓘ** next to your active config → **HTTPS Decryption**. Older builds: bottom **Settings** → **HTTPS Decryption**.
+2. Turn the switch **on** (blue). If there is only one switch, that is normal — it *is* the MITM switch.
+3. Confirm the domain list contains these four (usually added automatically by the module):
+   ```
+   gs-loc.apple.com
+   gs-loc-cn.apple.com
+   bluedot.is.autonavi.com
+   bluedot.is.autonavi.com.gds.alibabadns.com
+   ```
+   If missing, tap **+**, paste them comma-separated, and save (✓ top-right).
+
+### 3. Install and trust the CA certificate (the step 90% of people miss)
+
+1. On the HTTPS Decryption page tap **Certificate** → **Generate New CA Certificate** → **Install Certificate**.
+2. iPhone **Settings → General → VPN & Device Management** → the Shadowrocket profile → **Install** (enter passcode).
+3. ⚠️ **Settings → General → About → Certificate Trust Settings** → turn the Shadowrocket certificate **on** (full trust). Decryption does nothing until this switch is on.
+
+### 4. Start the proxy
+
+Back on the Shadowrocket home screen, flip the master switch **on** (green / "Connected"), and **Allow** the VPN configuration prompt the first time.
+
+### 5. Set your target coordinates
+
+The default is Apple Park (Cupertino). To change it: **Config → Modules → iOS Location Spoofer**, edit the `argument=` line:
+
+- `latitude=` → your latitude
+- `longitude=` → your longitude
+
+Common coordinates:
+
+| Place | latitude | longitude |
+|-------|----------|-----------|
+| Tiananmen, Beijing | 39.9087 | 116.3975 |
+| The Bund, Shanghai | 31.2397 | 121.4900 |
+| Canton Tower, Guangzhou | 23.1066 | 113.3245 |
+| Tokyo Tower | 35.6586 | 139.7454 |
+
+> To find any coordinate: open Google/Apple Maps, right-click or long-press the spot → copy coordinates (latitude first, longitude second).
+
+**Also adjust altitude** so you don't look suspicious — leaving altitude at the default 530 m while "in" Shanghai (near sea level) is an obvious tell. Query a spot's real elevation for free:
 ```
-ios-location-spoofer.sgmodule    # Shadowrocket / Surge
-ios-location-spoofer.lnplugin    # Loon
-ios-location-spoofer.snippet     # Quantumult X
-ios-location-spoofer.stoverride  # Stash
-location-spoofer.js              # 核心脚本（四平台共用）
-location-spoofer-qx.js           # QX 专用
-location-spoofer-config.json     # 配置样板
-使用教程.md                       # 小白保姆级图文教程
-location-picker/                 # 进阶（可选）：网页地图选点（Node 或 Cloudflare Worker）
-location-picker/worker/          # Cloudflare Worker 版（免 VPS，支持 Loon configUrl）
+https://api.open-meteo.com/v1/elevation?latitude=31.2397&longitude=121.4900
 ```
+See the [parameters](#changing-the-location) table below for everything you can tune.
 
-## 进阶：网页地图选点工具
+### 6. Make it take effect
 
-经常换定位、懒得手动查坐标改参数？项目自带 [`location-picker/`](location-picker/) 地图选点工具：点地图即定位、海拔自动、精度可调，Loon / Shadowrocket 通过 `configUrl` 读取。
+Apple caches location, so changes are not instant — you have to force a fresh request:
 
-**两种部署方式：**
+1. **Settings → Privacy & Security → Location Services** → turn **off**, wait 10+ seconds, turn **on**.
+2. Open **Maps** or **Weather** to check.
+3. If it hasn't changed, **repeat the off/on a few times**. Once it hits, it usually stays put.
 
-| 方式 | 目录 | 适合 |
-|------|------|------|
-| **Cloudflare Worker**（推荐） | [`location-picker/worker/`](location-picker/worker/) | 免 VPS、自带 HTTPS，[部署说明](location-picker/worker/README.md) |
-| Node 自托管 | [`location-picker/server.js`](location-picker/server.js) | 有自己的 VPS / NAS |
+## Changing the location
 
-Loon 插件 **远程配置 URL** 示例：
+Set these in the module's `argument=` (Shadowrocket/Surge/Stash) or in the Loon plugin UI:
 
-```
-https://你的worker.workers.dev/loc.json?token=你的TOKEN
-```
+| Name | Default | Description |
+|------|---------|-------------|
+| `latitude` | 37.3349 | Target latitude |
+| `longitude` | -122.00902 | Target longitude |
+| `address` | *(empty)* | Address search (Loon plugin UI; resolved online, takes priority over manual lat/lng) |
+| `altitude` | 530 | Altitude in metres (negative allowed) |
+| `horizontalAccuracy` | 39 | Horizontal accuracy (smaller = "sharper"; 5–15 looks GPS-like) |
+| `verticalAccuracy` | 1000 | Vertical accuracy (drop to 10–30 once altitude is real) |
+| `failOpen` | true | Pass the original data through on error |
+| `debug` | false | Debug logging |
 
-## 友情链接
+## Loon notes
 
-本项目接受 LINUX DO 社区佬友监督与反馈：[LINUX DO](https://linux.do)
+1. After importing `scripts/ios-location-spoofer.lnplugin`, open the plugin config page under **Settings → Plugins**.
+2. You can enter **latitude / longitude** directly; **address search** is resolved and cached by a cron job every 5 minutes (for the first run enter coordinates, or save an address and wait one cron cycle).
+3. Loon **MITM must be on** with the cert trusted, and the plugin's four `[mitm]` hostnames active.
+4. The plugin ships a **Prepare** request script (sets `Accept-Encoding: identity` to avoid `zip decompress error` / script timeouts).
+5. After changing coordinates, toggle Location Services; enable **Debug Log** and search `Location spoofer` in the Loon log.
 
-## location-picker 服务端配置
+> If you see `Evaluate script timeout` or `zip decompress error:-3`: update the plugin, reload Loon, and confirm all three scripts (Prepare / Response / Geocode cron) are enabled.
 
-`location-picker/server.js` 通过环境变量控制，**`TOKEN` 不设进程会直接退出，不会用弱口令兜底**。
+## Advanced: web map picker (Cloudflare Worker)
 
-| 变量 | 是否必设 | 默认值 | 说明 |
-|------|---------|--------|------|
-| `TOKEN` | **必设** | 无 | 访问口令和 Shadowrocket 模块 `argument=` 末尾的 `configUrl` 里的 `token=` 必须一致。建议 `openssl rand -hex 24` 生成 |
-| `PORT` | 否 | `8080` | 监听端口；1024 以下需 root |
-| `CERT` | 否 | 空 | HTTPS 证书 fullchain 路径；与 `KEY` 同时设置才走 https |
-| `KEY` | 否 | 空 | HTTPS 私钥路径；与 `CERT` 同时设置才走 https |
+Changing location often and tired of editing numbers by hand? The repo root **is** a Cloudflare Worker that gives you a tap-the-map picker: click to set location, altitude auto-filled by terrain, accuracy adjustable, plus a one-tap **restore real location** toggle — free (no VPS), HTTPS included, read by Loon / Shadowrocket via `configUrl`.
 
-启动示例：
+[![Deploy to Cloudflare](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https://github.com/hoicau/ios-location-spoofer)
+
+### Endpoints
+
+| Path | Method | Description |
+|------|--------|-------------|
+| `/?token=` | GET | Map picker page (**token required**) |
+| `/loc.json?token=` | GET | Read coordinates JSON |
+| `/set?token=` | POST | Save coordinates (turns spoofing on) |
+| `/enable` | POST | Toggle spoofing / restore real location — no token required (`{enabled:false}` passes original data through) |
+| `/health` | GET | Health check (no token) |
+
+### Deploy — Option A: one-click, in the browser (no CLI)
+
+1. Click the **Deploy to Cloudflare** button above and sign in to (or create) your Cloudflare account.
+2. Cloudflare reads `wrangler.jsonc`, **provisions the `LOC_KV` namespace and fills in its ID automatically**, clones the repo into your own GitHub, then builds & deploys the Worker. Review the resource list it shows, accept the defaults, and wait for the build to finish.
+3. **Set the access token** — required; the API rejects reads/saves until it exists. In the dashboard: **Workers & Pages → your worker → Settings → Variables and Secrets → Add**, choose type **Secret**, name it `TOKEN`, and set a long random string as the value (e.g. from `openssl rand -hex 24`), then **Deploy**.
+4. If the map page opens but saving fails, check **Settings → Bindings** for a **KV namespace** binding named `LOC_KV`; add one if it is missing.
+5. Copy your worker URL (`https://<name>.<account>.workers.dev`) and continue at [Point your proxy app at it](#point-your-proxy-app-at-it).
+
+> Later pushes to your GitHub copy auto-redeploy through Workers Builds.
+
+### Deploy — Option B: paste into the Cloudflare dashboard (no CLI, no GitHub)
+
+Prefer not to connect GitHub? The whole Worker is a single self-contained file, so you can paste it straight into the dashboard editor:
+
+1. **Workers & Pages → Create → Create Worker**, give it a name, and **Deploy** the starter.
+2. **Edit code**, delete the starter, and paste the entire contents of [`src/index.js`](src/index.js). **Deploy**.
+3. **Settings → Bindings → Add → KV namespace**: variable name `LOC_KV`, then create or select a namespace.
+4. **Settings → Variables and Secrets → Add → Secret**: name `TOKEN`, value a long random string (e.g. `openssl rand -hex 24`). **Deploy** once more.
+5. Open `https://<name>.<account>.workers.dev/?token=YOUR_TOKEN` — you should see the map. Continue at [Point your proxy app at it](#point-your-proxy-app-at-it).
+
+### Deploy — Option C: with the Wrangler CLI
 
 ```bash
-# http（最简，先跑通流程再用 https）
-TOKEN=$(openssl rand -hex 24) PORT=8080 node server.js
+# 1. install deps (from repo root)
+npm install
 
-# https（复用 acme.sh 证书；续期无需重启，进程每 12 小时自动热加载）
-TOKEN=$(openssl rand -hex 24) PORT=8443 \
-CERT=/root/cert/example.com/fullchain.pem \
-KEY=/root/cert/example.com/privkey.pem \
-node server.js
+# 2. set the access token (use e.g. `openssl rand -hex 24`)
+npx wrangler secret put TOKEN
+
+# 3. deploy — the first run auto-creates the LOC_KV namespace and writes
+#    its id back into wrangler.jsonc
+npm run deploy
 ```
 
-数据文件 `loc.json` 自动落在 `server.js` 同目录，记录当前坐标 / 海拔 / 精度；已在 `.gitignore` 中忽略，不会被误提交进仓库。
+Prefer to manage the namespace yourself? Create it and add the printed `id` (and `preview_id`) to the `LOC_KV` binding in `wrangler.jsonc` before deploying:
 
-> ⚠️ **不要把 `TOKEN` 写在命令行历史里**——推荐用 systemd 的 `Environment=` 或 `.env` + `direnv`，避免 `history` / `ps aux` 泄露。
+```bash
+npx wrangler kv namespace create LOC_KV
+npx wrangler kv namespace create LOC_KV --preview
+```
+
+For local dev, copy `.dev.vars.example` to `.dev.vars` and fill in `TOKEN=...`, then `npm run dev`.
+
+### Point your proxy app at it
+
+**Loon** → Settings → Plugins → iOS Location Spoofer → **Remote Config URL**:
+```
+https://your-worker.your-account.workers.dev/loc.json?token=YOUR_TOKEN
+```
+
+**Shadowrocket** → append to the module's `argument=`:
+```
+&configUrl=https://your-worker.your-account.workers.dev/loc.json?token=YOUR_TOKEN
+```
+
+Then open the picker on your iPhone at `https://your-worker.your-account.workers.dev/?token=YOUR_TOKEN`, tap the map → **Save** (or **Restore real location** to pass the original data through), and toggle Location Services (Loon refreshes its cache within ~60 s).
+
+Custom domain: Cloudflare Dashboard → Workers → your worker → Settings → Domains.
+
+> Data lives in Workers **KV** (not a local file), which is eventually consistent, so a save may take up to ~60 s to propagate. HTTPS is handled for you.
+
+## Troubleshooting
+
+**Location won't change?** Check in this order:
+1. The **Certificate Trust Settings** switch is actually on (step 3 — the most common cause).
+2. The module is present and **enabled** (✓).
+3. HTTPS decryption is on and all four Apple domains are listed.
+4. You **toggled Location Services off/on several times** (Apple caches aggressively).
+5. Set `debug=true` and watch the app's log for the intercepted `wloc` request — if you see it, interception works.
+
+**Domains didn't appear after import?** Add the four hostnames manually on the HTTPS Decryption page and save.
+
+**Can I restore my real location?** Yes — disable the module (or the proxy master switch) and refresh location once (step 4).
+
+**Apple News / region-dependent apps still think I'm in the old place?** Some apps also read iOS system services. Open **Settings → Privacy & Security → Location Services → System Services** and turn everything on (especially Location-Based Apple Ads, Significant Locations, iPhone Analytics, Routing & Traffic, Improve Maps), then toggle Location Services once more.
+
+## Project structure
+
+```
+.                              # repo root = Cloudflare Worker (web map picker)
+├── src/
+│   └── index.js               # Worker: API + inlined map picker page (single self-contained file)
+├── wrangler.jsonc             # Worker + KV config
+├── package.json
+├── .dev.vars.example          # copy to .dev.vars for local dev
+└── scripts/                   # proxy-app spoofer modules
+    ├── location-spoofer.js                 # core script (shared by 4 apps)
+    ├── location-spoofer-qx.js              # Quantumult X variant
+    ├── location-spoofer-config.json        # config sample
+    ├── ios-location-spoofer.sgmodule       # Shadowrocket
+    ├── ios-location-spoofer-surge.sgmodule # Surge (parameterized UI)
+    ├── ios-location-spoofer.lnplugin       # Loon
+    ├── ios-location-spoofer.snippet        # Quantumult X
+    └── ios-location-spoofer.stoverride     # Stash
+```
+
+## Credits
+
+Built on the core research of [acheong08/ios-location-spoofer](https://github.com/acheong08/ios-location-spoofer) (a standalone Go iOS app using a self-hosted VPN + MITM). This repo ports that logic to JavaScript for five proxy platforms and adds: multi-platform support, cell-tower coordinate rewriting (fields 22/24, not just Wi-Fi), multi-format response detection, and motion-activity spoofing.
