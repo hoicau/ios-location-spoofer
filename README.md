@@ -184,17 +184,18 @@ For local dev, copy `.dev.vars.example` to `.dev.vars` and fill in `TOKEN=...`, 
 
 ### Point your proxy app at it
 
-**Loon** → Settings → Plugins → iOS Location Spoofer → **Remote Config URL**:
+Point the module at your worker so it reads coordinates from `/loc.json` instead of the built-in fallback (Apple Park). The `configUrl` must include your token:
+
 ```
 https://your-worker.your-account.workers.dev/loc.json?token=YOUR_TOKEN
 ```
 
-**Shadowrocket** → append to the module's `argument=`:
-```
-&configUrl=https://your-worker.your-account.workers.dev/loc.json?token=YOUR_TOKEN
-```
+- **Loon** → Settings → Plugins → iOS Location Spoofer → set **Remote Config URL** to your URL above. Leaving it blank means it never reads `loc.json` and silently uses the fallback coordinates.
+- **Shadowrocket / Stash** → edit the module's `argument=` and replace the `configUrl=...` placeholder with your URL above.
+- **Surge** → edit the module's arguments and set **configUrl** to your URL above.
+- **Quantumult X** → *not* wired to `loc.json`; `location-spoofer-qx.js` uses its built-in coordinates only. Edit the `DEFAULT_CONFIG` at the top of that file to change location.
 
-Then open the picker on your iPhone at `https://your-worker.your-account.workers.dev/?token=YOUR_TOKEN`, tap the map → **Save** (or **Restore real location** to pass the original data through), and toggle Location Services (Loon refreshes its cache within ~60 s).
+Then open the picker on your iPhone at `https://your-worker.your-account.workers.dev/?token=YOUR_TOKEN`, tap the map → **Save** (or **Restore real location** to pass the original data through), and toggle Location Services (the script fetches fresh config on the next request; Loon refreshes its cache within ~60 s).
 
 Custom domain: Cloudflare Dashboard → Workers → your worker → Settings → Domains.
 
@@ -207,9 +208,10 @@ Custom domain: Cloudflare Dashboard → Workers → your worker → Settings →
 2. The module is present and **enabled** (✓).
 3. HTTPS decryption is on and all four Apple domains are listed.
 4. You **toggled Location Services off/on several times** (Apple caches aggressively).
-5. Set `debug=true` and watch the app's log for the intercepted `wloc` request — if you see it, interception works.
 
-**Domains didn't appear after import?** Add the four hostnames manually on the HTTPS Decryption page and save.
+**Picked a point but it still shows Apple Park (37.3349, -122.00902)?** That default is the fallback the script uses when it can't read your worker. `https://your-worker.your-account.workers.dev/loc.json?token=YOUR_TOKEN"` — if *that* already returns the latitude and longitude of Apple Park (37.3349, -122.00902), save the pin in the picker first. If it returns your selected location but the map still shows that you're at Apple Park, please confirm `configUrl` is filled in (Loon/Shadowrocket/Surge/Stash).
+
+**Domains didn't appear after import?** Add the 4 hostnames manually on the HTTPS Decryption page and save.
 
 **Can I restore my real location?** Yes — disable the module (or the proxy master switch) and refresh location once (step 4).
 

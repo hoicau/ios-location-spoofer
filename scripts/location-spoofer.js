@@ -806,8 +806,6 @@
       "longitude",
       "altitude",
       "address",
-      "configHost",
-      "configToken",
       "horizontalAccuracy",
       "verticalAccuracy",
       "unknownValue4",
@@ -862,16 +860,7 @@
 
   function resolveConfigUrl(args) {
     args = args || {};
-    var direct = String(args.configUrl || args.cfg || args.url || "").trim();
-    if (direct) {
-      return direct;
-    }
-    var host = String(args.configHost || "").trim().replace(/\/+$/, "");
-    var token = String(args.configToken || "").trim();
-    if (host && token) {
-      return host + "/loc.json?token=" + encodeURIComponent(token);
-    }
-    return "";
+    return String(args.configUrl || args.cfg || args.url || "").trim();
   }
 
   function isPlaceholderValue(value) {
@@ -900,8 +889,6 @@
       "longitude",
       "altitude",
       "address",
-      "configHost",
-      "configToken",
       "configUrl",
       "debug"
     ];

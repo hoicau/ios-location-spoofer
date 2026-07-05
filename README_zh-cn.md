@@ -186,17 +186,18 @@ npx wrangler kv namespace create LOC_KV --preview
 
 ### 接到代理软件
 
-**Loon** → 设置 → 插件 → iOS Location Spoofer → **远程配置 URL**：
+把模块指向你的 Worker，让它从 `/loc.json` 读坐标，而不是用内置备用值（默认 Apple Park）。`configUrl` 必须带上 token：
+
 ```
 https://你的worker.你的账号.workers.dev/loc.json?token=你的TOKEN
 ```
 
-**Shadowrocket** → 模块 `argument=` 末尾追加：
-```
-&configUrl=https://你的worker.你的账号.workers.dev/loc.json?token=你的TOKEN
-```
+- **Loon** → 设置 → 插件 → iOS Location Spoofer → 把 **远程配置 URL** 填成上面你的地址。留空 = 不读 `loc.json`，会静默退回用备用坐标。
+- **Shadowrocket / Stash** → 编辑模块的 `argument=`，把里面的 `configUrl=...` 占位符换成上面你的地址。
+- **Surge** → 编辑模块参数，把 **configUrl** 设成上面你的地址。
+- **Quantumult X** → *不*读 `loc.json`；`location-spoofer-qx.js` 只用内置坐标。要改定位请直接改该文件顶部的 `DEFAULT_CONFIG`。
 
-然后在 iPhone 浏览器打开 `https://你的worker.你的账号.workers.dev/?token=你的TOKEN`，点地图 → **保存**（或点 **恢复真实定位** 让脚本放行），关开定位服务生效（Loon 约 60 秒内刷新缓存）。
+然后在 iPhone 浏览器打开 `https://你的worker.你的账号.workers.dev/?token=你的TOKEN`，点地图 → **保存**（或点 **恢复真实定位** 让脚本放行），关开定位服务生效（脚本会在下次请求时拉取最新配置；Loon 约 60 秒内刷新缓存）。
 
 自定义域名：Cloudflare Dashboard → Workers → 你的 Worker → Settings → Domains。
 
@@ -210,6 +211,8 @@ https://你的worker.你的账号.workers.dev/loc.json?token=你的TOKEN
 3. HTTPS 解密是否打开、四个苹果域名是否都在。
 4. **有没有多试几次关/开定位**（苹果缓存重，往往要重复几遍）。
 5. 把 `debug=false` 改成 `debug=true`，看日志有没有拦到 `wloc` 请求 —— 能看到就说明拦截成功。
+
+**已选点却还是显示 Apple Park（37.3349, -122.00902）？** 这个默认值是脚本读不到 Worker 时的备用坐标。先确认 `https://your-worker.your-account.workers.dev/loc.json?token=YOUR_TOKEN` 的内容。如果返回 Apple Park 经纬度（37.3349, -122.00902），说明未保存坐标；如果这里返回的是你的设定位置，但地图还是 Apple Park，请确认 `configUrl` 已填（Loon/Shadowrocket/Surge/Stash）。
 
 **导入后域名没自动出现？** 在 HTTPS 解密页面手动加那四个域名并保存。
 
