@@ -1240,18 +1240,6 @@
     });
   }
 
-  function refreshRemoteConfigCache(url, debug) {
-    fetchRemoteConfig(url, 5000, debug, function (data, err) {
-      if (data) {
-        writeRemoteConfigCache(url, data);
-        return;
-      }
-      if (debug) {
-        console.log("Location spoofer remote config refresh failed: " + err);
-      }
-    });
-  }
-
   function applyAddressFromCache(cfg, address, debug) {
     if (!address) {
       return;
@@ -1328,12 +1316,11 @@
       return;
     }
 
-    if (readRemoteConfigCache(configUrl)) {
-      refreshRemoteConfigCache(configUrl, debug);
-      finish();
-      return;
-    }
-
+    // Always fetch the freshest config at intercept time so the on/off toggle
+    // (enabled) and coordinate edits take effect on the very next location
+    // request instead of being masked by the ≤5-min cache. The cache is used
+    // only as a fallback when the fetch fails (offline / timeout).
+    var cachedCfg = readRemoteConfigCache(configUrl);
     if (debug) {
       console.log("Location spoofer remote config fetching: " + configUrl);
     }
@@ -1343,11 +1330,22 @@
         cfg = mergeConfig(cfg, data);
         if (debug) {
           console.log(
-            "Location spoofer remote config loaded -> " + data.latitude + "," + data.longitude
+            "Location spoofer remote config loaded (fresh) -> " +
+              data.latitude + "," + data.longitude + ", enabled=" + data.enabled
           );
         }
-      } else if (debug) {
-        console.log("Location spoofer remote config fetch failed: " + err + " (using manual lat/lng)");
+      } else {
+        if (cachedCfg) {
+          cfg = mergeConfig(cfg, cachedCfg);
+          if (debug) {
+            console.log(
+              "Location spoofer remote config fetch failed: " + err +
+                " (falling back to cache, enabled=" + cachedCfg.enabled + ")"
+            );
+          }
+        } else if (debug) {
+          console.log("Location spoofer remote config fetch failed: " + err + " (using manual lat/lng)");
+        }
       }
       finish();
     });
